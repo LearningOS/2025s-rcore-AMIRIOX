@@ -45,6 +45,7 @@ pub struct TaskManagerInner {
     tasks: [TaskControlBlock; MAX_APP_NUM],
     /// id of current `Running` task
     current_task: usize,
+    syscall_cnt: [[u32; 500]; 20],
 }
 
 lazy_static! {
@@ -65,6 +66,7 @@ lazy_static! {
                 UPSafeCell::new(TaskManagerInner {
                     tasks,
                     current_task: 0,
+                    syscall_cnt: [[0; 500]; 20],
                 })
             },
         }
@@ -88,6 +90,28 @@ impl TaskManager {
             __switch(&mut _unused as *mut TaskContext, next_task_cx_ptr);
         }
         panic!("unreachable in run_first_task!");
+    }
+
+    // Update syscall count
+    fn update_syscall_count(&self, id: usize) {
+        if id >= 500 {
+            panic!("Error: expected syscall id less than 500!");
+        }
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        inner.syscall_cnt[current][id] += 1;
+        drop(inner);
+    }
+
+    fn get_syscall_count(&self, id: usize) -> u32 {
+        if id >= 500 {
+            panic!("Error: expected syscall id less than 500!");
+        }
+        let inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        let ret = inner.syscall_cnt[current][id];
+        drop(inner);
+        ret
     }
 
     /// Change the status of current `Running` task into `Ready`.
@@ -168,4 +192,14 @@ pub fn suspend_current_and_run_next() {
 pub fn exit_current_and_run_next() {
     mark_current_exited();
     run_next_task();
+}
+
+/// Update syscall count
+pub fn update_syscall_count(id: usize) {
+    TASK_MANAGER.update_syscall_count(id);
+}
+
+/// Get syscall count
+pub fn get_syscall_count(id: usize) -> u32 {
+    TASK_MANAGER.get_syscall_count(id)
 }
