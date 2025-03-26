@@ -3,6 +3,7 @@
 
 use super::{PhysAddr, PhysPageNum};
 use crate::config::MEMORY_END;
+use crate::mm::{address::VirtPageNum, VirtAddr};
 use crate::sync::UPSafeCell;
 use alloc::vec::Vec;
 use core::fmt::{self, Debug, Formatter};
@@ -134,4 +135,10 @@ pub fn frame_allocator_test() {
     }
     drop(v);
     println!("frame_allocator_test passed!");
+}
+
+#[allow(unused)]
+/// fuck u there's no docs
+pub fn alloc_map(start_ptr: usize, len: usize, prot: usize, token: usize) -> isize {
+    -1
 }
