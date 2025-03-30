@@ -62,6 +62,11 @@ impl PageTableEntry {
     pub fn executable(&self) -> bool {
         (self.flags() & PTEFlags::X) != PTEFlags::empty()
     }
+
+    /// The page can be visited on user mode
+    pub fn user(&self) -> bool {
+        (self.flags() & PTEFlags::U) != PTEFlags::empty()
+    }
 }
 
 /// page table structure
@@ -157,6 +162,54 @@ impl PageTable {
     /// get the token from the page table
     pub fn token(&self) -> usize {
         8usize << 60 | self.root_ppn.0
+    }
+}
+
+/// Translate a single u8 to read
+pub fn translated_byte_u8_read(token: usize, ptr: *const u8) -> Option<&'static u8> {
+    println!("finding {}'s phys address", ptr as usize);
+    if ptr as usize > 274877906944 {
+        // more than 256 GiB
+        println!("too big!");
+        return None;
+    }
+
+    let page_table = PageTable::from_token(token);
+    let start_va = VirtAddr::from(ptr as usize);
+    let vpn = start_va.floor();
+    let pte = page_table.translate(vpn);
+    match pte {
+        None => None,
+        Some(pte) => {
+            let ppn = pte.ppn();
+            if !pte.user() || !pte.is_valid() || !pte.readable() {
+                return None;
+            }
+            Some(&ppn.get_bytes_array()[start_va.page_offset()])
+        }
+    }
+}
+
+/// Translate a single u8 to write
+pub fn translated_byte_u8_write(token: usize, ptr: *const u8) -> Option<&'static mut u8> {
+    if ptr as usize > 274877906944 {
+        return None;
+    }
+
+    let page_table = PageTable::from_token(token);
+    let start = ptr as usize;
+    let start_va = VirtAddr::from(start);
+    let vpn = start_va.floor();
+    let pte = page_table.translate(vpn);
+    match pte {
+        None => None,
+        Some(pte) => {
+            let ppn = pte.ppn();
+            if !pte.user() || !pte.is_valid() || !pte.writable() {
+                return None;
+            }
+            Some(&mut ppn.get_bytes_array()[start_va.page_offset()])
+        }
     }
 }
 
