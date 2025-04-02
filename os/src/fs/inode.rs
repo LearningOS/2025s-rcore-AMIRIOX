@@ -53,6 +53,7 @@ impl OSInode {
         }
         v
     }
+
 }
 
 lazy_static! {
@@ -156,4 +157,35 @@ impl File for OSInode {
         }
         total_write_size
     }
+    fn update_nlink(&self, dt: i32) {
+        let inner = self.inner.exclusive_access();
+        inner.inode.update_nlink(dt);
+        drop(inner);
+    }
+    fn nlink(&self) -> u32 {
+        let inner = self.inner.exclusive_access();
+        let nlink = inner.inode.nlink();
+        println!("the inode::nlink = {}.", nlink);
+        drop(inner);
+        nlink
+    }
+
+    fn mode(&self) -> super::StatMode {
+        let inner = self.inner.exclusive_access();
+        let is_dir = inner.inode.is_dir();
+        drop(inner);
+        if is_dir {
+            super::StatMode::DIR
+        }else {
+            super::StatMode::FILE
+        }
+    }
+
+    fn inode_id(&self) -> u64 {
+        let inner = self.inner.exclusive_access();
+        let id = inner.inode.inode_id();
+        drop(inner);
+        id
+    }
 }
+

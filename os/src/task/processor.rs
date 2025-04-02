@@ -7,10 +7,13 @@
 use super::__switch;
 use super::{fetch_task, TaskStatus};
 use super::{TaskContext, TaskControlBlock};
+use crate::mm::{MapPermission, VirtAddr, VirtPageNum};
 use crate::sync::UPSafeCell;
 use crate::trap::TrapContext;
 use alloc::sync::Arc;
 use lazy_static::*;
+
+const BIGSTRIDE: usize = 1145141919;
 
 /// Processor management structure
 pub struct Processor {
@@ -44,6 +47,70 @@ impl Processor {
     pub fn current(&self) -> Option<Arc<TaskControlBlock>> {
         self.current.as_ref().map(Arc::clone)
     }
+
+    /// mmap
+    fn mmap(&self, start_va: VirtAddr, end_va: VirtAddr, prot: usize) -> isize {
+        // check prot valid
+        if !start_va.aligned() || prot & !0x7 != 0 || prot & 0x7 == 0 {
+            return -1;
+        }
+        let mut perm = MapPermission::U;
+        if (prot & 0b001) != 0 {
+            perm |= MapPermission::R;
+        }
+        if (prot & 0b010) != 0 {
+            perm |= MapPermission::W;
+        }
+        if (prot & 0b100) != 0 {
+            perm |= MapPermission::X;
+        }
+
+        let mut current = self.current.as_ref().unwrap().inner_exclusive_access();
+        let memory_set = &mut current.memory_set;
+
+        // check mem valid
+        let start_vpn: VirtPageNum = start_va.into();
+        let end_vpn: VirtPageNum = end_va.ceil();
+        for vpn in start_vpn.0..end_vpn.0 {
+            if let Some(pte) = memory_set.translate(VirtPageNum::from(vpn)) {
+                if pte.is_valid() {
+                    return -1;
+                }
+            }
+        }
+
+        memory_set.insert_framed_area(start_va, end_va, perm);
+        drop(current);
+        0
+    }
+
+    fn munap(&self, start_va: VirtAddr, end_va: VirtAddr) -> isize {
+        let mut current = self.current.as_ref().unwrap().inner_exclusive_access();
+        let memory_set = &mut current.memory_set;
+
+        // check mem valid
+        if !start_va.aligned() {
+            return -1;
+        }
+
+        let start_vpn: VirtPageNum = start_va.into();
+        let end_vpn: VirtPageNum = end_va.ceil();
+        for vpn in start_vpn.0..end_vpn.0 {
+            let vpn = VirtPageNum::from(vpn);
+            if let Some(pte) = memory_set.translate(vpn) {
+                if !pte.is_valid() {
+                    return -1;
+                }
+                //memory_set.unmap_vpn(vpn);
+                memory_set.shrink_to(start_va, start_va);
+            } else {
+                return -1;
+            }
+        }
+
+        drop(current);
+        0
+    }
 }
 
 lazy_static! {
@@ -61,6 +128,7 @@ pub fn run_tasks() {
             let mut task_inner = task.inner_exclusive_access();
             let next_task_cx_ptr = &task_inner.task_cx as *const TaskContext;
             task_inner.task_status = TaskStatus::Running;
+            task_inner.stride += BIGSTRIDE / task_inner.priority;
             // release coming task_inner manually
             drop(task_inner);
             // release coming task TCB manually
@@ -108,4 +176,21 @@ pub fn schedule(switched_task_cx_ptr: *mut TaskContext) {
     unsafe {
         __switch(switched_task_cx_ptr, idle_task_cx_ptr);
     }
+}
+
+
+/// mmap
+/*
+ * start 没有按页大小对齐
+ * prot & !0x7 != 0 (prot 其余位必须为0)
+ * prot & 0x7 = 0 (这样的内存无意义)
+ * [start, start + len) 中存在已经被映射的页
+ * 物理内存不足
+ * */
+pub fn task_mmap(start_va: VirtAddr, end_va: VirtAddr, prot: usize) -> isize {
+    PROCESSOR.exclusive_access().mmap(start_va, end_va, prot)
+}
+
+pub fn task_munmap(start_va: VirtAddr, end_va: VirtAddr) -> isize {
+    PROCESSOR.exclusive_access().munap(start_va, end_va)
 }

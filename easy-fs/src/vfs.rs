@@ -29,6 +29,47 @@ impl Inode {
             block_device,
         }
     }
+
+    /// Update nlink of DiskInode
+    pub fn update_nlink(&self, dt: i32) {
+        /*
+        get_block_cache(self.block_id, Arc::clone(&self.block_device))
+            .lock()
+            .modify(self.block_offset, |disk_inode: &mut DiskInode| {
+                disk_inode.update_nlink(&self.block_device, dt);
+            })
+        */
+        self.modify_disk_inode(|disk_inode| {
+            let dt_abs = if dt >= 0 { dt as u32 } else { (-dt) as u32 };
+            if dt >= 0 {
+                disk_inode.nlink += dt_abs;
+            } else if disk_inode.nlink >= dt_abs {
+                disk_inode.nlink -= dt_abs;
+            }
+        });
+    }
+
+    /// nlink
+    pub fn nlink(&self) -> u32 {
+        /*
+        get_block_cache(self.block_id, Arc::clone(&self.block_device))
+            .lock()
+            .read(self.block_offset, |disk_inode: &DiskInode| {
+                disk_inode.nlink(&self.block_device)
+            })
+        */
+        self.read_disk_inode(|disk_inode| disk_inode.nlink)
+    }
+
+    /// is dir or not
+    pub fn is_dir(&self) -> bool {
+        get_block_cache(self.block_id, Arc::clone(&self.block_device))
+            .lock()
+            .read(self.block_offset, |disk_inode: &DiskInode| {
+                disk_inode.is_dir()
+            })
+    }
+
     /// Call a function over a disk inode to read it
     fn read_disk_inode<V>(&self, f: impl FnOnce(&DiskInode) -> V) -> V {
         get_block_cache(self.block_id, Arc::clone(&self.block_device))
@@ -85,11 +126,70 @@ impl Inode {
         }
         let blocks_needed = disk_inode.blocks_num_needed(new_size);
         let mut v: Vec<u32> = Vec::new();
-        for _ in 0..blocks_needed {
+        for _ in 0..blocks_needed + 1 {
             v.push(fs.alloc_data());
         }
-        disk_inode.increase_size(new_size, v, &self.block_device);
+        disk_inode.increase_size(
+            new_size, /* nlink block takes 1 */
+            v,
+            &self.block_device,
+        );
     }
+    /// Linkat
+    pub fn linkat(&self, old_name: &str, new_name: &str) -> isize {
+        let inode_id =
+            self.read_disk_inode(|disk_inode| self.find_inode_id(old_name, disk_inode).unwrap());
+        let inode = self.find(old_name).unwrap();
+        inode.update_nlink(1);
+
+        self.modify_disk_inode(|disk_inode| {
+            let file_count = (disk_inode.size as usize) / DIRENT_SZ;
+            let new_size = (file_count + 1) * DIRENT_SZ;
+            let mut fs = self.fs.lock();
+            self.increase_size(new_size as u32, disk_inode, &mut fs);
+            drop(fs);
+
+            let dirent = DirEntry::new(new_name, inode_id);
+            disk_inode.write_at(
+                file_count * DIRENT_SZ,
+                &dirent.as_bytes(),
+                &self.block_device,
+            );
+            0
+        })
+    }
+    /// Unlinkat
+    pub fn unlinkat(&self, name: &str) -> isize {
+        // let inode_id = self.read_disk_inode(|disk_node| self.find_inode_id(name, disk_node));
+        let inode = self.find(name).unwrap();
+        inode.update_nlink(-1);
+        self.modify_disk_inode(|disk_inode| {
+            let file_count = (disk_inode.size as usize) / DIRENT_SZ;
+            for entry_id in 0..file_count {
+                let mut dirent = DirEntry::empty();
+                disk_inode.read_at(
+                    entry_id * DIRENT_SZ,
+                    dirent.as_bytes_mut(),
+                    &self.block_device,
+                );
+                if dirent.name() == name {
+                    disk_inode.write_at(
+                        entry_id * DIRENT_SZ,
+                        DirEntry::empty().as_bytes_mut(),
+                        &self.block_device,
+                    );
+                    break;
+                }
+            }
+        });
+
+        if inode.nlink() == 0 {
+            inode.clear();
+        }
+
+        0
+    }
+
     /// Create inode under current inode by name
     pub fn create(&self, name: &str) -> Option<Arc<Inode>> {
         let mut fs = self.fs.lock();
@@ -182,5 +282,12 @@ impl Inode {
             }
         });
         block_cache_sync_all();
+    }
+
+    /// get inode id
+    pub fn inode_id(&self) -> u64 {
+        self.fs
+            .lock()
+            .get_inode_id(self.block_id as u32, self.block_offset)
     }
 }

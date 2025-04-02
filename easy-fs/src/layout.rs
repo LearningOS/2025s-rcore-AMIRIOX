@@ -82,6 +82,7 @@ type DataBlock = [u8; BLOCK_SZ];
 #[repr(C)]
 pub struct DiskInode {
     pub size: u32,
+    pub nlink: u32,
     pub direct: [u32; INODE_DIRECT_COUNT],
     pub indirect1: u32,
     pub indirect2: u32,
@@ -93,6 +94,7 @@ impl DiskInode {
     /// indirect1 and indirect2 block are allocated only when they are needed
     pub fn initialize(&mut self, type_: DiskInodeType) {
         self.size = 0;
+        self.nlink = 1;
         self.direct.iter_mut().for_each(|v| *v = 0);
         self.indirect1 = 0;
         self.indirect2 = 0;
@@ -102,6 +104,23 @@ impl DiskInode {
     pub fn is_dir(&self) -> bool {
         self.type_ == DiskInodeType::Directory
     }
+
+    /*
+    /// Update nlink
+    pub fn update_nlink(&mut self, block_device: &Arc<dyn BlockDevice>, dt: u32) {
+        get_block_cache(self.nlink as usize, Arc::clone(block_device))
+            .lock()
+            .modify(0, |v: &mut u32| *v += dt);
+    }
+
+    /// Get nlink
+    pub fn nlink(&self, block_device: &Arc<dyn BlockDevice>) -> u32 {
+        get_block_cache(self.nlink as usize, Arc::clone(block_device))
+            .lock()
+            .read(0, |&v| v)
+    }
+    */
+
     /// Whether this inode is a file
     #[allow(unused)]
     pub fn is_file(&self) -> bool {
@@ -129,7 +148,7 @@ impl DiskInode {
             total +=
                 (data_blocks - INDIRECT1_BOUND + INODE_INDIRECT1_COUNT - 1) / INODE_INDIRECT1_COUNT;
         }
-        total as u32
+        total as u32 // nlink
     }
     /// Get the number of data blocks that have to be allocated given the new size of data
     pub fn blocks_num_needed(&self, new_size: u32) -> u32 {
@@ -172,6 +191,17 @@ impl DiskInode {
         self.size = new_size;
         let mut total_blocks = self.data_blocks();
         let mut new_blocks = new_blocks.into_iter();
+
+        // fill nlink
+        /*
+        if self.nlink_blk == 0 {
+            self.nlink_blk = new_blocks.next().unwrap();
+            get_block_cache(self.nlink_blk as usize, Arc::clone(block_device))
+                .lock()
+                .modify(0, |v: &mut u32| {
+                    *v = 1;
+                });
+        }*/
         // fill direct
         while current_blocks < total_blocks.min(INODE_DIRECT_COUNT as u32) {
             self.direct[current_blocks as usize] = new_blocks.next().unwrap();
@@ -233,6 +263,7 @@ impl DiskInode {
                     }
                 }
             });
+        new_blocks.clone().peekable().peek().unwrap();
     }
 
     /// Clear size to zero and return blocks that should be deallocated.

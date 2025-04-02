@@ -39,6 +39,14 @@ impl File for Stdin {
     fn write(&self, _user_buf: UserBuffer) -> usize {
         panic!("Cannot write to stdin!");
     }
+
+    fn nlink(&self) -> u32 {
+        1
+    }
+    fn update_nlink(&self, _dt: i32) {}
+    fn mode(&self) -> super::StatMode {
+        super::StatMode::NULL
+    }
 }
 
 impl File for Stdout {
@@ -56,5 +64,13 @@ impl File for Stdout {
             print!("{}", core::str::from_utf8(*buffer).unwrap());
         }
         user_buf.len()
+    }
+    fn nlink(&self) -> u32 {
+        1
+    }
+    fn update_nlink(&self, _dt: i32) {}
+
+    fn mode(&self) -> super::StatMode {
+        super::StatMode::NULL
     }
 }

@@ -1,13 +1,14 @@
 //! Process management syscalls
 //!
+use crate::timer::get_time_us;
 use alloc::sync::Arc;
 
 use crate::{
     fs::{open_file, OpenFlags},
-    mm::{translated_refmut, translated_str},
+    mm::{translated_byte_buffer, translated_refmut, translated_str, VirtAddr},
     task::{
         add_task, current_task, current_user_token, exit_current_and_run_next,
-        suspend_current_and_run_next,
+        suspend_current_and_run_next, task_mmap, task_munmap,
     },
 };
 
@@ -105,30 +106,53 @@ pub fn sys_waitpid(pid: isize, exit_code_ptr: *mut i32) -> isize {
 /// YOUR JOB: get time with second and microsecond
 /// HINT: You might reimplement it with virtual memory management.
 /// HINT: What if [`TimeVal`] is splitted by two pages ?
-pub fn sys_get_time(_ts: *mut TimeVal, _tz: usize) -> isize {
-    trace!(
-        "kernel:pid[{}] sys_get_time NOT IMPLEMENTED",
-        current_task().unwrap().pid.0
-    );
-    -1
+pub fn sys_get_time(ts: *mut TimeVal, _tz: usize) -> isize {
+    trace!("kernel:pid[{}] sys_get_time", current_task().unwrap().pid.0);
+    let us = get_time_us();
+    let tv = TimeVal {
+        sec: us / 1_000_000,
+        usec: us % 1_000_000,
+    };
+
+    let token = current_user_token();
+    let mut buffer =
+        translated_byte_buffer(token, ts as *const u8, core::mem::size_of::<TimeVal>());
+    if buffer.len() == 1 {
+        let slice = &mut buffer[0];
+        let ts_ptr = slice.as_mut_ptr() as *mut TimeVal;
+        unsafe {
+            *ts_ptr = tv;
+        }
+    } else if buffer.len() == 2 {
+        unsafe {
+            let tv_bytes = core::slice::from_raw_parts(
+                &tv as *const _ as *const u8,
+                core::mem::size_of::<TimeVal>(),
+            );
+
+            let first = &mut buffer[0];
+            let first_len = first.len();
+            first.copy_from_slice(&tv_bytes[..first_len]);
+
+            let second = &mut buffer[1];
+            second.copy_from_slice(&tv_bytes[first_len..]);
+        }
+    } else {
+        panic!("syscall get_time: *ts takes more than two pages.");
+    }
+    0
 }
 
 /// YOUR JOB: Implement mmap.
-pub fn sys_mmap(_start: usize, _len: usize, _port: usize) -> isize {
-    trace!(
-        "kernel:pid[{}] sys_mmap NOT IMPLEMENTED",
-        current_task().unwrap().pid.0
-    );
-    -1
+pub fn sys_mmap(start: usize, len: usize, prot: usize) -> isize {
+    trace!("kernel:pid[{}] sys_mmap", current_task().unwrap().pid.0);
+    task_mmap(VirtAddr::from(start), VirtAddr::from(start + len), prot)
 }
 
 /// YOUR JOB: Implement munmap.
-pub fn sys_munmap(_start: usize, _len: usize) -> isize {
-    trace!(
-        "kernel:pid[{}] sys_munmap NOT IMPLEMENTED",
-        current_task().unwrap().pid.0
-    );
-    -1
+pub fn sys_munmap(start: usize, len: usize) -> isize {
+    trace!("kernel:pid[{}] sys_munmap", current_task().unwrap().pid.0);
+    task_munmap(VirtAddr(start), VirtAddr(start + len))
 }
 
 /// change data segment size
@@ -143,19 +167,30 @@ pub fn sys_sbrk(size: i32) -> isize {
 
 /// YOUR JOB: Implement spawn.
 /// HINT: fork + exec =/= spawn
-pub fn sys_spawn(_path: *const u8) -> isize {
-    trace!(
-        "kernel:pid[{}] sys_spawn NOT IMPLEMENTED",
-        current_task().unwrap().pid.0
-    );
-    -1
+pub fn sys_spawn(path: *const u8) -> isize {
+    trace!("kernel:pid[{}] sys_spawn", current_task().unwrap().pid.0);
+    let name = translated_str(current_user_token(), path);
+    if let Some(file_inode) = open_file(name.as_str(), OpenFlags::RDONLY) {
+        let elf_data = file_inode.read_all();
+        let current = current_task().unwrap();
+        let new_task = current.create_child(&elf_data);
+        let pid = new_task.pid.0;
+        add_task(new_task);
+        pid as isize
+    } else {
+        -1
+    }
 }
 
 // YOUR JOB: Set task priority.
-pub fn sys_set_priority(_prio: isize) -> isize {
+pub fn sys_set_priority(prio: isize) -> isize {
     trace!(
-        "kernel:pid[{}] sys_set_priority NOT IMPLEMENTED",
+        "kernel:pid[{}] sys_set_priority",
         current_task().unwrap().pid.0
     );
-    -1
+    if prio < 2 {
+        return -1;
+    }
+    current_task().unwrap().inner_exclusive_access().priority = prio as usize;
+    prio
 }
