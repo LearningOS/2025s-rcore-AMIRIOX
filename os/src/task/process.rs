@@ -15,6 +15,8 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::cell::RefMut;
 
+// const SYNC_RES_MAX: usize = 1145141919;
+
 /// Process Control Block
 pub struct ProcessControlBlock {
     /// immutable
@@ -49,6 +51,17 @@ pub struct ProcessControlBlockInner {
     pub semaphore_list: Vec<Option<Arc<Semaphore>>>,
     /// condvar list
     pub condvar_list: Vec<Option<Arc<Condvar>>>,
+    /// Available
+    pub mutex_available: Vec<isize>,
+    pub semaphore_available: Vec<isize>,
+    /// allocation[tid][res_id] = allocated resources in tid thread
+    pub mutex_allocation: Vec<Vec<isize>>,
+    pub semaphore_allocation: Vec<Vec<isize>>,
+    /// need[tid][res_id] = needed ...
+    pub mutex_need: Vec<Vec<isize>>,
+    pub semaphore_need: Vec<Vec<isize>>,
+    /// enable checker or not
+    pub deadlock_detect: bool,
 }
 
 impl ProcessControlBlockInner {
@@ -119,6 +132,13 @@ impl ProcessControlBlock {
                     mutex_list: Vec::new(),
                     semaphore_list: Vec::new(),
                     condvar_list: Vec::new(),
+                    mutex_available: Vec::new(),
+                    mutex_allocation: Vec::new(),
+                    mutex_need: Vec::new(),
+                    semaphore_available: Vec::new(),
+                    semaphore_allocation: Vec::new(),
+                    semaphore_need: Vec::new(),
+                    deadlock_detect: false,
                 })
             },
         });
@@ -245,6 +265,13 @@ impl ProcessControlBlock {
                     mutex_list: Vec::new(),
                     semaphore_list: Vec::new(),
                     condvar_list: Vec::new(),
+                    mutex_available: Vec::new(),
+                    mutex_allocation: vec![vec![]],
+                    mutex_need: vec![vec![]],
+                    semaphore_available: Vec::new(),
+                    semaphore_allocation: vec![vec![]],
+                    semaphore_need: vec![vec![]],
+                    deadlock_detect: parent.deadlock_detect,
                 })
             },
         });
@@ -281,5 +308,103 @@ impl ProcessControlBlock {
     /// get pid
     pub fn getpid(&self) -> usize {
         self.pid.0
+    }
+    /// deadlock_detect
+    pub fn detect(
+        &self,
+        inner: &ProcessControlBlockInner,
+        available: &Vec<isize>,
+        need: &Vec<Vec<isize>>,
+        allocation: &Vec<Vec<isize>>,
+        res_size: usize
+    ) -> bool {
+        // let inner = self.inner_exclusive_access();
+        let mut work: Vec<_> = available.clone();
+        let mut finish: Vec<_> = inner.tasks.iter().cloned().map(|t| t.is_none()).collect();
+        /*
+        loop {
+            let ttid = inner.tasks.iter().find_map(|task| {
+                task.as_ref().and_then(|t| {
+                    let tcb_inner = t.inner_exclusive_access();
+                    let ttid = tcb_inner.res.as_ref()?.tid;
+                    if !finish[ttid] {
+                        return None;
+                    }
+
+                    for res_id in 0..mutex_size {
+                        if inner.mutex_need[ttid][res_id] > 0
+                            && inner.mutex_need[ttid][res_id] > work[res_id] {
+                            return None;
+                        }
+                    }
+                    Some(ttid)
+                })
+            });
+
+            if let Some(ttid) = ttid {
+                for res_id in 0..mutex_size {
+                    work[res_id] += inner.mutex_allocation[ttid][res_id];
+                    finish[ttid] = true;
+                }
+            } else {
+                break;
+            }
+        }
+        */
+        println!("detecting...");
+        loop {
+            let mut progressed = false;
+
+            println!("loop <here> for");
+            for (ttid, task) in inner.tasks.iter().enumerate() {
+                if finish[ttid] {
+                    continue;
+                }
+                if let Some(t) = task {
+                    let tcb_inner = t.inner_exclusive_access();
+                    if tcb_inner.res.is_none() {
+                        //continue;
+                    }
+
+                    let can_proceed =
+                        (0..res_size).all(|res_id| need[ttid][res_id] <= work[res_id]);
+
+                    if can_proceed {
+                        for res_id in 0..res_size {
+                            work[res_id] += allocation[ttid][res_id];
+                        }
+                        finish[ttid] = true;
+                        println!("found: {}", ttid);
+                        progressed = true;
+                    }
+                }
+            }
+
+            if !progressed {
+                break;
+            }
+        }
+        println!("breakthe loop");
+
+        let ok = finish.iter().all(|&b| b);
+        if !ok {
+            let id = finish
+                .iter()
+                .enumerate()
+                .find(|&(_, v)| !v)
+                .map(|(id, _)| id)
+                .unwrap();
+
+            println!(
+                "unsatisfied: tid {}:\n
+                need = {:?}, \n
+                allocation = {:?}, \n
+                work = {:?}. \n
+                Available: {:?}\n
+                ",
+                id, &need[id], &allocation[id], &work, &available,
+            );
+        }
+        ok
     }
 }

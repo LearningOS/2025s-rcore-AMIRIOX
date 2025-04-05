@@ -1,4 +1,5 @@
 use crate::{
+    alloc::vec,
     mm::kernel_token,
     task::{add_task, current_task, TaskControlBlock},
     trap::{trap_handler, TrapContext},
@@ -50,6 +51,25 @@ pub fn sys_thread_create(entry: usize, arg: usize) -> isize {
         trap_handler as usize,
     );
     (*new_task_trap_cx).x[10] = arg;
+
+    let thread_size = process_inner.mutex_allocation.len();
+    let mutex_size = process_inner.mutex_allocation[0].len();
+    let semaphore_size = process_inner.semaphore_allocation[0].len();
+    if new_task_tid == thread_size {
+        process_inner.mutex_allocation.push(vec![0; mutex_size]);
+        process_inner.mutex_need.push(vec![0; mutex_size]);
+        process_inner
+            .semaphore_allocation
+            .push(vec![0; semaphore_size]);
+        process_inner.semaphore_need.push(vec![0; semaphore_size]);
+    } else if new_task_tid < thread_size {
+        process_inner.mutex_allocation[new_task_tid] = vec![0; mutex_size];
+        process_inner.mutex_need[new_task_tid] = vec![0; mutex_size];
+        process_inner.semaphore_allocation[new_task_tid] = vec![0; semaphore_size];
+        process_inner.semaphore_need[new_task_tid] = vec![0; semaphore_size];
+    } else {
+        panic!("failed to create mutex data structure");
+    }
     new_task_tid as isize
 }
 /// get current thread id syscall

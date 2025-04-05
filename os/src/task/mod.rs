@@ -65,7 +65,9 @@ pub fn block_current_and_run_next() {
     let task_cx_ptr = &mut task_inner.task_cx as *mut TaskContext;
     task_inner.task_status = TaskStatus::Blocked;
     drop(task_inner);
+    println!("shit.....!!!");
     schedule(task_cx_ptr);
+    println!("what???");
 }
 
 use crate::board::QEMUExit;

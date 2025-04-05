@@ -49,7 +49,9 @@ impl Semaphore {
         if inner.count < 0 {
             inner.wait_queue.push_back(current_task().unwrap());
             drop(inner);
+            println!("will it be here?");
             block_current_and_run_next();
+            println!("will it be here?");
         }
     }
 }

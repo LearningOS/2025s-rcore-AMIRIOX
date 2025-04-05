@@ -18,9 +18,9 @@ fn panic(info: &PanicInfo) -> ! {
     } else {
         println!("[kernel] Panicked: {}", info.message().unwrap());
     }
-    // unsafe {
-    //     backtrace();
-    // }
+    unsafe {
+        backtrace();
+    }
     shutdown()
 }
 /// backtrace function
@@ -34,8 +34,10 @@ unsafe fn backtrace() {
         if fp == stop {
             break;
         }
-        println!("#{}:ra={:#x}", i, *((fp - 8) as *const usize));
-        fp = *((fp - 16) as *const usize);
+        unsafe {
+            println!("#{}:ra={:#x}", i, *((fp - 8) as *const usize));
+            fp = *((fp - 16) as *const usize);
+        }
     }
     println!("---END   BACKTRACE---");
 }
